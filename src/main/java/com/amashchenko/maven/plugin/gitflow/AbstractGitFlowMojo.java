@@ -16,6 +16,7 @@
 package com.amashchenko.maven.plugin.gitflow;
 
 import java.io.FileReader;
+import java.util.AbstractMap.SimpleEntry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +47,10 @@ import org.codehaus.plexus.util.cli.Commandline;
 public abstract class AbstractGitFlowMojo extends AbstractMojo {
     /** A full name of the versions-maven-plugin set goal. */
     private static final String VERSIONS_MAVEN_PLUGIN_SET_GOAL = "org.codehaus.mojo:versions-maven-plugin:set";
+    /** A full name of the versions-maven-plugin update-parent goal. */
+    private static final String VERSIONS_MAVEN_PLUGIN_UPDATE_PARENT_GOAL = "org.codehaus.mojo:versions-maven-plugin:update-parent";
+    /** A full name of the versions-maven-plugin update-child-modules goal. */
+    private static final String VERSIONS_MAVEN_PLUGIN_UPDATE_CHILD_MODULES_GOAL = "org.codehaus.mojo:versions-maven-plugin:update-child-modules";
     /** A full name of the versions-maven-plugin set-property goal. */
     private static final String VERSIONS_MAVEN_PLUGIN_SET_PROPERTY_GOAL = "org.codehaus.mojo:versions-maven-plugin:set-property";
     /** Name of the tycho-versions-plugin set-version goal. */
@@ -226,12 +231,42 @@ public abstract class AbstractGitFlowMojo extends AbstractMojo {
      * @throws MojoFailureException
      */
     protected String getCurrentProjectVersion() throws MojoFailureException {
+    	String version = getCurrentProjectVersionCore().getKey();
+    	return version;
+    }
+    
+    /**
+     * Returns a true if the version was inherited. 
+     * 
+     * @return Current project version.
+     * @throws MojoFailureException
+     */
+    protected boolean isInheritedVersion() throws MojoFailureException {
+    	boolean result = getCurrentProjectVersionCore().getValue();
+    	return result;
+    }
+
+    /**
+     * Gets current project version from pom.xml file or the effective model.
+     * A flag indicates the source: false=file, true=effective model / inherited
+     * 
+     * @return Current project version.
+     * @throws MojoFailureException
+     */
+    protected Entry<String, Boolean> getCurrentProjectVersionCore() throws MojoFailureException {
         final Model model = readModel(mavenSession.getCurrentProject());
-        if (model.getVersion() == null) {
+        boolean isInheritedVersion = false;
+        String version = model.getVersion();
+        if(version == null) {
+        	isInheritedVersion = true;
+        	version = mavenSession.getCurrentProject().getVersion();
+        }        
+        
+        if (version == null) {
             throw new MojoFailureException(
                     "Cannot get current project version. This plugin should be executed from the parent project.");
         }
-        return model.getVersion();
+        return new SimpleEntry<String, Boolean>(version, isInheritedVersion);    	
     }
 
     /**
@@ -924,6 +959,9 @@ public abstract class AbstractGitFlowMojo extends AbstractMojo {
     protected void mvnSetVersions(final String version) throws MojoFailureException, CommandLineException {
         getLog().info("Updating version(s) to '" + version + "'.");
 
+        // Determine whether we are setting the version on a parent- or child-module project
+        boolean isInheritedVersion = isInheritedVersion();
+        
         String newVersion = "-DnewVersion=" + version;
         String g = "";
         String a = "";
@@ -942,7 +980,16 @@ public abstract class AbstractGitFlowMojo extends AbstractMojo {
             executeMvnCommand(TYCHO_VERSIONS_PLUGIN_SET_GOAL, prop, newVersion, "-Dtycho.mode=maven");
         } else {
             if (!skipUpdateVersion) {
-                executeMvnCommand(VERSIONS_MAVEN_PLUGIN_SET_GOAL, g, a, newVersion, "-DgenerateBackupPoms=false");
+            	if(isInheritedVersion) {
+            		executeMvnCommand(
+            				"-N",
+            				VERSIONS_MAVEN_PLUGIN_UPDATE_PARENT_GOAL,
+            				"-DparentVersion=[" + version + "]",
+            				"-DallowSnapshots=true",
+            				VERSIONS_MAVEN_PLUGIN_UPDATE_CHILD_MODULES_GOAL);            		
+            	} else {
+            		executeMvnCommand(VERSIONS_MAVEN_PLUGIN_SET_GOAL, g, a, newVersion, "-DgenerateBackupPoms=false");
+            	}
             }
 
             if (StringUtils.isNotBlank(versionProperty)) {
